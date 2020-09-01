@@ -12,11 +12,11 @@ import (
 	"autoscaler/db"
 	"autoscaler/models"
 
-	_ "github.com/lib/pq"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"github.com/jmoiron/sqlx"
 )
 
 var dbHelper *sqlx.DB
@@ -35,10 +35,10 @@ var _ = BeforeSuite(func() {
 	}
 	database, err := db.GetConnection(dbUrl)
 	if err != nil {
-		Fail("failed to parse database connection: "+ err.Error())
+		Fail("failed to parse database connection: " + err.Error())
 	}
 
-	dbHelper, e =  sqlx.Open(database.DriverName, database.DSN)
+	dbHelper, e = sqlx.Open(database.DriverName, database.DSN)
 	if e != nil {
 		Fail("can not connect database: " + e.Error())
 	}
@@ -110,6 +110,16 @@ func hasServiceInstance(serviceInstanceId string) bool {
 	return rows.Next()
 }
 
+func hasServiceInstanceWithNullDefaultPolicy(serviceInstanceId string) bool {
+	query := dbHelper.Rebind("SELECT * FROM service_instance WHERE service_instance_id = ? AND default_policy IS NULL AND default_policy_guid IS NULL")
+	rows, e := dbHelper.Query(query, serviceInstanceId)
+	if e != nil {
+		Fail("can not query table service_instance: " + e.Error())
+	}
+	defer rows.Close()
+	return rows.Next()
+}
+
 func hasServiceBinding(bindingId string, serviceInstanceId string) bool {
 	query := dbHelper.Rebind("SELECT * FROM binding WHERE binding_id = ? AND service_instance_id = ? ")
 	rows, e := dbHelper.Query(query, bindingId, serviceInstanceId)
@@ -135,6 +145,20 @@ func insertPolicy(appId string, scalingPolicy *models.ScalingPolicy) {
 
 	query := dbHelper.Rebind("INSERT INTO policy_json(app_id, policy_json, guid) VALUES(?, ?, ?)")
 	_, e = dbHelper.Exec(query, appId, string(policyJson), "1234")
+
+	if e != nil {
+		Fail("can not insert data to table policy_json: " + e.Error())
+	}
+}
+
+func insertPolicyWithGuid(appId string, scalingPolicy *models.ScalingPolicy, guid string) {
+	policyJson, e := json.Marshal(scalingPolicy)
+	if e != nil {
+		Fail("failed to marshall scaling policy" + e.Error())
+	}
+
+	query := dbHelper.Rebind("INSERT INTO policy_json(app_id, policy_json, guid) VALUES(?, ?, ?)")
+	_, e = dbHelper.Exec(query, appId, string(policyJson), guid)
 
 	if e != nil {
 		Fail("can not insert data to table policy_json: " + e.Error())
@@ -386,7 +410,7 @@ func validateLockNotInDB(owner string) error {
 
 func formatPolicyString(policyStr string) string {
 	scalingPolicy := &models.ScalingPolicy{}
-	err := json.Unmarshal([]byte(policyStr),&scalingPolicy)
+	err := json.Unmarshal([]byte(policyStr), &scalingPolicy)
 	if err != nil {
 		fmt.Errorf("failed to unmarshal policyJson string %s", policyStr)
 		return ""
@@ -397,4 +421,12 @@ func formatPolicyString(policyStr string) string {
 		return ""
 	}
 	return string(policyJsonStr)
+}
+
+func expectServiceInstancesToEqual(actual *models.ServiceInstance, expected *models.ServiceInstance) {
+	ExpectWithOffset(1, actual.ServiceInstanceId).To(Equal(expected.ServiceInstanceId))
+	ExpectWithOffset(1, actual.OrgId).To(Equal(expected.OrgId))
+	ExpectWithOffset(1, actual.SpaceId).To(Equal(expected.SpaceId))
+	ExpectWithOffset(1, actual.DefaultPolicy).To(MatchJSON(expected.DefaultPolicy))
+	ExpectWithOffset(1, actual.DefaultPolicyGuid).To(Equal(expected.DefaultPolicyGuid))
 }
